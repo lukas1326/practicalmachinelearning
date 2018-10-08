@@ -1,0 +1,132 @@
+---
+title: "Practical Machine Learning Prediction Assignment"
+author: "Olga Lukasevych"
+date: "October 1, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,message = FALSE,warning = FALSE)
+```
+
+## Project description.
+The goal of this project is to predict the manner in which people did the exercise
+using data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants.
+Six young healthy participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: 
+exactly according to the specification - Class A, 
+throwing the elbows to the front - Class B, 
+lifting the dumbbell only halfway - Class C, 
+lowering the dumbbell only halfway - Class D
+throwing the hips to the front - Class E.[1]
+
+Having two data sets, one is with defined output class - "training" dataset, and other for 
+prediction class or the manner in which people did exercise, we try to build the model
+using cross-validation and the "caret" package.
+
+##Loading and pre-processing data
+For model builing we used "caret" package and packages allowing do parallel processing.
+```{r libraries}
+library(tidyverse)
+library(caret)
+library(parallel)
+library(doParallel)
+```
+
+The data was loaded from the given urls for training and testing dataset.
+```{r load data, message=FALSE, warning=FALSE,results='hide'}
+train_url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+test_url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+download.file(train_url,"data/training.csv")
+download.file(test_url,"data/testing.csv")
+```
+
+```{r reading data}
+training <- read.csv("data/training.csv")
+testing <- read.csv("data/testing.csv")
+```
+Dimention of two datasets:
+training - `r dim(training)`
+testing - `r dim(testing)`
+
+The output column in "training" dataset is "classe". Let's see the frequence and 
+proportion:
+
+```{r EDA}
+percentage <- prop.table(table(training$classe))*100
+cbind(freq=table(training$classe), percentage= percentage)
+```
+
+The data set has 160 predictors.
+From the codebook we know the data includes calculated statistics with prefixes 
+"kurtosis_", "skewness_", "max_", "min_", "amplitude_", "var_", "avg_", and "stddev_".
+We drop these statistics from the original dataset. After we check the predictors for the near zero variables,
+using nearZeroVar() function from caret package that shows us the one variable to drop. Also the
+predictors from columns 1,2,3,4,5,6,7 can be dropped too as the predictors with no information regarding experiment measurment.
+
+```{r drop columns}
+## drop culculated columns
+calstat <- c("kurtosis", "skewness", "max", "min", "amplitude", "var", "avg", "stddev")
+dropstat <- unique(grep(paste(calstat,collapse = "|"),names(training)))
+##variables with near zero variance
+nz <- nearZeroVar(training[,-dropstat])
+##data frames for modeling and testing with the same dimention
+clean1 <- training[,-c(dropstat,nz,3,4,1,2,5,6,7)]
+clean2 <- testing[,-c(dropstat,nz,3,4,1,2,5,6,7)]
+```
+
+##Model for prediction
+
+We use cross validation deviding training set into two sub-sets for train and test the model:
+```{r partition,warning=FALSE,message=FALSE}
+# create training & testing data sets
+inTraining <- createDataPartition(clean1$classe, p = .75, list=FALSE)
+train <- clean1[inTraining,]
+test <- clean1[-inTraining,]
+```
+
+
+Model is choosen random forest. The processing takes less time using parallel precessing function.For trainconrol the cross validation method choosen with 5 folders.
+```{r modelling}
+set.seed(13)
+# set up training run for x / y 
+x <- train[,-53]
+y <- train[,53]
+
+cluster <- makeCluster(detectCores()) 
+registerDoParallel(cluster)
+metric <- "Accuracy"
+fitControl <- trainControl(method = "cv",
+                           number = 5)
+fit.rf <- train(x,y, method="rf",data=train,trControl = fitControl,metric=metric)
+stopCluster(cluster)
+registerDoSEQ() 
+
+fit.rf$resample
+confusionMatrix.train(fit.rf)
+```
+
+Checking model on the sub-test:
+```{r presiction}
+#checking model on the sub-test
+predTest <- predict(fit.rf,test)
+confusionMatrix(predTest, test$classe)[["table"]]
+```
+Accuracy of the model:`r confusionMatrix(predTest,test$classe)$overall[[2]]`
+
+
+Using the model from random forest method we make the prediction for given test dataset:
+```{r result}
+result <- predict(fit.rf,clean2[,-53])
+expand.grid(result)
+```
+##Conclusion
+Random forest is the method for classification and in our case we have taken result
+with high accuracy. For this result we made pre-processing to illuminate a huge number of 
+unnessesary predictors. 
+
+
+
+###Reference:
+[1]Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+Read more: http://groupware.les.inf.puc-rio.br/har#ixzz5TKAiJDP0
